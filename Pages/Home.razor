@@ -1,0 +1,142 @@
+@page "/"
+@inject QuizService Quiz
+
+<PageTitle>안전교육 시험</PageTitle>
+<div class="shell">
+<header><h1>안전교육 시험 · 학습</h1><p>145문제 문제은행 | 4지선다 | 문제별 해설</p></header>
+@if (!loaded) { <div class="panel">문제은행을 불러오는 중입니다...</div> }
+else
+{
+    <nav class="toolbar">
+        <button @onclick="StartRandom">랜덤 20문제</button>
+        <button @onclick="StartStudy">전체 문제 학습</button>
+        <button @onclick="StartMarked" disabled="@(!HasMarked)">체크 문제 재시험</button>
+        <button @onclick="StartWrong" disabled="@(!HasWrong)">오답 재시험</button>
+        <button @onclick="StartMarkedOrWrong" disabled="@(!HasMarked && !HasWrong)">체크 + 오답</button>
+    </nav>
+    @if (attempts.Count > 0)
+    {
+        var current = attempts[index];
+        <section class="panel">
+            <div class="topline"><strong>@(studying ? "학습" : submitted ? "시험 결과" : "시험 진행")</strong><span>@(index + 1) / @attempts.Count</span></div>
+            <div class="progress"><div style="width:@((index + 1) * 100.0 / attempts.Count)%"></div></div>
+            <div class="question-head"><h2>문제 @(index + 1). @current.Question.Text</h2><label class="mark"><input type="checkbox" checked="@current.Marked" @onchange="e => SetMarked(e.Value is true)" /> 복습 체크</label></div>
+            <div class="options">
+            @for (var i = 0; i < current.Question.Options.Count; i++)
+            {
+                var choice = i;
+                var reveal = studying && showAnswer || submitted;
+                var css = reveal && choice == current.Question.Answer ? "correct" : reveal && current.Selected == choice && choice != current.Question.Answer ? "incorrect" : "";
+                <label class="option @css">
+                    <input type="radio" name="answer" checked="@(current.Selected == choice)" disabled="@(submitted || studying)" @onchange="() => SelectAnswer(choice)" />
+                    <span>@(choice + 1). @current.Question.Options[choice]</span>
+                </label>
+            }
+            </div>
+            @if (studying)
+            {
+                <div class="actions"><button @onclick="() => showAnswer = !showAnswer">@(showAnswer ? "정답 · 해설 숨기기" : "정답 · 해설 보기")</button></div>
+            }
+            @if ((studying && showAnswer) || submitted)
+            {
+                <aside class="explanation"><strong>정답: @(current.Question.Answer + 1)번 — @current.Question.Options[current.Question.Answer]</strong>
+                    <p>@current.Question.Explanation</p>
+                    @if (IsNegative(current.Question.Text)) { <p class="hint">부정형 문제입니다. 정답 이외의 보기도 함께 비교해 보세요.</p> }
+                </aside>
+            }
+            <div class="actions between"><button class="secondary" disabled="@(index == 0)" @onclick="Previous">← 이전</button><button class="secondary" disabled="@(index == attempts.Count - 1)" @onclick="Next">다음 →</button></div>
+            <div class="navigator">@for (var i = 0; i < attempts.Count; i++) { var n = i; <button class="number @(index == i ? "active" : "") @(attempts[i].Marked ? "flagged" : "")" title="문제 @(i + 1)" @onclick="() => Go(n)">@(i + 1)</button> }</div>
+            @if (!studying && !submitted) { <div class="actions"><button @onclick="Submit">시험 제출 및 채점</button></div> }
+        </section>
+        @if (submitted)
+        {
+            <section class="panel result"><h2>시험 결과</h2><div class="score">@Score 점</div><p>정답 @CorrectCount / @attempts.Count · 오답 @WrongCount · 미응답 @UnansweredCount</p><p>번호 버튼을 누르면 문제별 정답과 해설을 볼 수 있습니다.</p></section>
+        }
+    }
+    else { <section class="panel">상단에서 시험 또는 학습 모드를 선택해 주세요.</section> }
+    <footer>응시 기록은 현재 페이지에서만 유지됩니다. 브라우저를 닫거나 새로고침하면 초기화됩니다.</footer>
+}
+</div>
+
+@code {
+    private IReadOnlyList<Question> bank = Array.Empty<Question>();
+    private List<QuestionAttempt> attempts = new();
+    private List<QuestionAttempt> history = new();
+    private int index;
+    private bool loaded;
+    private bool studying;
+    private bool submitted;
+    private bool showAnswer;
+
+    /// <summary>화면이 처음 표시될 때 문제은행 JSON을 읽습니다.</summary>
+    protected override async Task OnInitializedAsync()
+    {
+        bank = await Quiz.LoadAsync();
+        loaded = true;
+    }
+
+    /// <summary>전체 문제은행에서 20문제를 무작위로 출제합니다.</summary>
+    private void StartRandom() => Start(QuizService.Create(bank));
+
+    /// <summary>모든 문제를 번호순으로 표시하는 학습 모드입니다.</summary>
+    private void StartStudy() => Start(bank.OrderBy(q => q.Id).Select(q => new QuestionAttempt { Question = q }).ToList(), true);
+
+    /// <summary>복습 체크한 문제만 다시 출제합니다.</summary>
+    private void StartMarked() => Start(QuizService.Create(history.Where(x => x.Marked).Select(x => x.Question), int.MaxValue));
+
+    /// <summary>제출한 시험에서 오답 또는 미응답 문제만 다시 출제합니다.</summary>
+    private void StartWrong() => Start(QuizService.Create(history.Where(x => x.IsWrong).Select(x => x.Question), int.MaxValue));
+
+    /// <summary>체크한 문제와 오답 문제를 합쳐 중복 없이 다시 출제합니다.</summary>
+    private void StartMarkedOrWrong() => Start(QuizService.Create(history.Where(x => x.Marked || x.IsWrong).Select(x => x.Question).DistinctBy(x => x.Id), int.MaxValue));
+
+    /// <summary>현재 응시 결과를 보관하고 새 시험 화면을 초기화합니다.</summary>
+    private void Start(List<QuestionAttempt> list, bool study = false)
+    {
+        SaveHistory();
+        attempts = list;
+        index = 0;
+        studying = study;
+        submitted = false;
+        showAnswer = false;
+    }
+
+    /// <summary>현재 시험의 답안과 체크 상태를 복습 목록에 반영합니다.</summary>
+    private void SaveHistory()
+    {
+        if (attempts.Count == 0 || studying) return;
+        foreach (var item in attempts)
+        {
+            history.RemoveAll(x => x.Question.Id == item.Question.Id);
+            history.Add(item);
+        }
+    }
+
+    /// <summary>현재 문제에서 선택한 답을 저장합니다.</summary>
+    private void SelectAnswer(int choice) => attempts[index].Selected = choice;
+
+    /// <summary>현재 문제의 복습 체크 상태를 변경합니다.</summary>
+    private void SetMarked(bool value) => attempts[index].Marked = value;
+
+    /// <summary>이전 문제로 이동합니다.</summary>
+    private void Previous() { if (index > 0) { index--; showAnswer = false; } }
+
+    /// <summary>다음 문제로 이동합니다.</summary>
+    private void Next() { if (index < attempts.Count - 1) { index++; showAnswer = false; } }
+
+    /// <summary>문제 번호를 눌러 해당 문제로 이동합니다.</summary>
+    private void Go(int number) { index = number; showAnswer = false; }
+
+    /// <summary>시험을 종료하고 정답과 선택 답안을 비교해 점수를 계산합니다.</summary>
+    private void Submit() { submitted = true; SaveHistory(); }
+
+    /// <summary>부정형 문제인지 판단해 학습 안내 문구를 표시합니다.</summary>
+    private static bool IsNegative(string text) => new[] { "아닌", "않은", "틀린", "옳지", "적절하지", "잘못된" }.Any(text.Contains);
+
+    private bool HasMarked => history.Any(x => x.Marked) || attempts.Any(x => x.Marked);
+    private bool HasWrong => history.Any(x => x.IsWrong);
+    private int CorrectCount => attempts.Count(x => x.Selected == x.Question.Answer);
+    private int WrongCount => attempts.Count(x => x.Selected.HasValue && x.IsWrong);
+    private int UnansweredCount => attempts.Count(x => !x.Selected.HasValue);
+    private int Score => attempts.Count == 0 ? 0 : (int)Math.Round(CorrectCount * 100.0 / attempts.Count);
+}
