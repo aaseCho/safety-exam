@@ -25,7 +25,7 @@ else
             @for (var i = 0; i < current.Question.Options.Count; i++)
             {
                 var choice = i;
-                var reveal = studying && showAnswer || submitted;
+                var reveal = studying || submitted;
                 var css = reveal && choice == current.Question.Answer ? "correct" : reveal && current.Selected == choice && choice != current.Question.Answer ? "incorrect" : "";
                 <label class="option @css">
                     <input type="radio" name="answer" checked="@(current.Selected == choice)" disabled="@(submitted || studying)" @onchange="() => SelectAnswer(choice)" />
@@ -35,13 +35,16 @@ else
             </div>
             @if (studying)
             {
-                <div class="actions"><button @onclick="() => showAnswer = !showAnswer">@(showAnswer ? "정답 · 해설 숨기기" : "정답 · 해설 보기")</button></div>
+                <div class="actions"><button @onclick="() => showAnswer = !showAnswer">@(showAnswer ? "해설 닫기" : "해설 보기")</button></div>
             }
-            @if ((studying && showAnswer) || submitted)
+            @if (studying || submitted)
             {
                 <aside class="explanation"><strong>정답: @(current.Question.Answer + 1)번 — @current.Question.Options[current.Question.Answer]</strong>
-                    <p>@current.Question.Explanation</p>
-                    @if (IsNegative(current.Question.Text)) { <p class="hint">부정형 문제입니다. 정답 이외의 보기도 함께 비교해 보세요.</p> }
+                    @if (!studying || showAnswer)
+                    {
+                        <p>@current.Question.Explanation</p>
+                    }
+                    @if ((!studying || showAnswer) && IsNegative(current.Question.Text)) { <p class="hint">부정형 문제입니다. 정답 이외의 보기도 함께 비교해 보세요.</p> }
                 </aside>
             }
             <div class="actions between"><button class="secondary" disabled="@(index == 0)" @onclick="Previous">← 이전</button><button class="secondary" disabled="@(index == attempts.Count - 1)" @onclick="Next">다음 →</button></div>
